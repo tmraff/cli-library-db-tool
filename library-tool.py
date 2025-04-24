@@ -1,12 +1,20 @@
 # Import requests library so I can talk to the API
 import requests
+
 # Hello sys. Useful for CLI stuff
 import sys 
 
-# Define constants
-API_KEY = "fbDo38Joogrf8-In0vjcVb5dCK0yuhZL5M06GM1A"
-BASE_ID = "pov40kx5cdtfqty"
+# Eyy privacy bro
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
+
+# dotenv consts
+API_KEY = os.getenv("API_KEY")
+BASE_ID = os.getenv("BASE_ID")
+
+# Table IDs yay
 TABLE_IDS = {
     "BOOKS": "mth1bd75romp8p3",
     "AUTHORS": "mgd51sp0b93cu0y",
