@@ -43,11 +43,14 @@ def get_records(table_id_arg):
 
 def format_books(book):
     '''Formats book records cleanly. Takes a record from the Books table as an argument and prints the output nicely'''
-    print(f"{book['Title']} ({book.get('First Published', 'Unknown')})")
-    print(f"  Author(s): {', '.join(book.get('Author(s)', []))}")
-    print(f"  Genre: {book.get('Genre', 'N/A')}")
-    print(f"  Status: {book['Status']} | Rating: {book['Rating']}")
+    print(f"{book['Title']} ({book['First Published']})")
+    print(f"   Author(s): {', '.join(book['Author(s)'])}")
+    print(f"   Genre: {book.get('Genre', 'N/A').replace(',', ', ')}")
+    print(f"   Tags: {book.get('Tags', 'N/A').replace(',', ', ')}")
+    print(f"   Status: {book['Status']} | Rating: {book['Rating']}")
+    print(f"   Owned: {'Yes' if book['Owned'] else 'No'} | Annotated: {'Yes' if book['Annotated'] else 'No'}")
     print("-" * 40)
+
 
 def format_authors(author):
     '''Formats author records cleanly. Takes a record from the Authors table as an argument and prints the output nicely'''
