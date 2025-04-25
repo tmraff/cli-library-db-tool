@@ -1,8 +1,15 @@
 # Import requests library so I can talk to the API
 import requests
 
-# Hello sys. Useful for CLI stuff
-import sys 
+# CLI stuff
+import argparse
+
+parser = argparse.ArgumentParser(
+    description="CLI tool to manage and query your personal library database."
+, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+subparsers = parser.add_subparsers(dest="command", required=True)
+
 
 # Eyy privacy bro
 from dotenv import load_dotenv
@@ -219,7 +226,6 @@ def search_records(term, table_key, fields="Title"):
     if not table_id:
         print("Table not found.")
         print_valid_tables()
-        print_help()
         return
 
     # Allow both strings and lists as field input
@@ -289,143 +295,89 @@ def list_book_editions(book_title):
 def search_vibe(search_term):
     search_records(search_term, "Books", ["Genre", "Tags"])
 
-def print_help():
-    '''Prints a help menu explaining all available commands'''
-    print("-" * 47)
-    print(r"""
- ____  _  _    __    __  ____  ____  __  ____ 
-(  __)( \/ )  (  )  (  )(  _ \(  _ \(  )/ ___)
- ) _)  )  (   / (_/\ )(  ) _ ( )   / )( \___ \
-(____)(_/\_)  \____/(__)(____/(__\_)(__)(____/
-          """)
-    print("-" * 47)
-    print(r"""
-Usage:
-
-    python library-tool.py -g <table>
-        Get and display all records from a specified table.
-
-    python library-tool.py -e <table> <field>
-        Find and display all records in a table where the specified field is empty.
-
-    python library-tool.py <table>
-        Show all available fields in the specified table. Useful for checking valid field names.
-
-    python library-tool.py tables
-        Show all available tables. Useful for checking valid table names.
-
-    python library-tool.py -a <author>
-        List all books by a given author
-
-    python library-tool.py -s <term> <table> [field]
-        Search for a term in a specific field of a table. Field is optional; defaults to 'Title'.
-
-          """)
-
-# I stole all this from chatgpt. Something something stealing is learning if you figure out what each line does
-
-# Checks if you have actually included an argument. If not, prints help and exits with error code 1
-if len(sys.argv) < 2:
-    print_help()
-    sys.exit(1)
-
-# Grabs first argument and makes it lowercase
-command = sys.argv[1].lower()
-
-# Logic for using get_records()
-if command in ("-g", "--get"):
-
-    # Makes sure there is one argument after -g
-    if len(sys.argv) != 3:
-        print("Error: Please specify a table name.")
-        print_help()
-        sys.exit(1)
-
-    # Grabs table arg, converts to uppercase, and looks up the corresp table ID
-    table_key = sys.argv[2].upper()
-    table_id = TABLE_IDS.get(table_key)
-
-    # Contingency for user choosing non-existent table
+# Handle functions for the nice fun argparse stuff
+def handle_get(table_key):
+    table_id = TABLE_IDS.get(table_key.upper())
     if not table_id:
         print("Invalid table name.")
-        print_help()
-        sys.exit(1)
+        print_valid_tables()
+        return
 
-    # Fetches data from database
     records = get_records(table_id)
-
-    # Chooses the right format. If none exists, prints raw
-    formatter = FORMATTERS.get(table_key, lambda x: print(x))
-
-    # Formats each record
+    formatter = FORMATTERS.get(table_key.upper(), lambda x: print(x))
     for record in records:
         formatter(record)
 
-# Logic for using find_empty_fields()
-elif command in ("-e", "--empty"):
-    if len(sys.argv) != 4:
-        print("Error: Please specify a table and field name.")
-        print_help()
-        sys.exit(1)
-    table_key = sys.argv[2].upper()
-    field_name = sys.argv[3]
-    formatter = FORMATTERS.get(table_key, lambda x: print(x))
+def handle_empty(table_key, field_name):
+    formatter = FORMATTERS.get(table_key.upper(), lambda x: print(x))
     find_empty_fields(table_key, field_name, formatter)
 
-# Logic for listing all valid tables
-elif len(sys.argv) == 2 and sys.argv[1].lower() == "tables":
-    print_valid_tables()
-    sys.exit(0)
-
-# Logic for using python library-tool.py <table>
-elif len(sys.argv) == 2:
-    table_key = sys.argv[1].upper()
+def handle_list_fields(table_key):
     list_fields(table_key)
-    sys.exit(0)
 
-# Logic for using list_author_works()
-elif command in ("-a", "--author-works"):
-    if len(sys.argv) != 3:
-        print("Error: Please specify an author name.")
-        print_help()
-        sys.exit(1)
-    author_name = sys.argv[2]
+def handle_list_tables():
+    print_valid_tables()
+
+def handle_author_works(author_name):
     list_author_works(author_name)
 
-# Logic for using search_records()
-elif command in ("-s", "--search"):
-    if len(sys.argv) < 4:
-        print("Error: Please provide a search term and table name.")
-        print_help()
-        sys.exit(1)
+def handle_search(term, table_key, field="Title"):
+    search_records(term, table_key, field)
 
-    search_term = sys.argv[2]
-    table_key = sys.argv[3]
-    fields = sys.argv[4:] if len(sys.argv) > 4 else ["Title"]  # Default to Title
+def handle_vibe_search(term):
+    search_records(term, "books", ["Genre", "Tags"])
 
-    search_records(search_term, table_key, fields)
-
-# Logic for list_book_editions()
-elif command in ("-b", "--book-editions"):
-    if len(sys.argv) != 3:
-        print("Error: Please specify a book title.")
-        print_help()
-        sys.exit(1)
-    book_title = sys.argv[2]
+def handle_list_editions(book_title):
     list_book_editions(book_title)
 
-# Logic for search_vibe()
-elif command in ("-v", "--vibe"):
-    if len(sys.argv) != 3:
-        print("Error: Please include a search term.")
-        print_help()
-        sys.exit(1)
-    search_term = sys.argv[2]
-    search_vibe(search_term)
 
-# If you've got through everything else and it ain't right, you've done fugged up
-else:
-    print("Error: Unknown command.")
-    print_help()
-    sys.exit(1)
+# It's argparse time baby
+get_parser = subparsers.add_parser("get", help="Get all records from a specified table")
+get_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS.keys()], type=str.lower, help ="Table to fetch records from")
+
+empty_parser = subparsers.add_parser("empty", help="Find records with empty fields")
+empty_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS.keys()], type=str.lower, help="Table to search")
+empty_parser.add_argument("field", help="Field name to check for emptiness")
+
+search_parser = subparsers.add_parser("search", help="Search for a term in a table")
+search_parser.add_argument("term", help="Search term")
+search_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS.keys()], type=str.lower, help="Table to search")
+search_parser.add_argument("--field", default="Title", help="Field to search in")
+
+filter_parser = subparsers.add_parser("filter", help="Filter records by multiple field=value criteria")
+filter_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS.keys()], type=str.lower, help="Table to filter")
+filter_parser.add_argument("criteria", nargs="+", help="List of filters, e.g. Genre=fiction Owned=true")
+
+author_parser = subparsers.add_parser("author-works", help="List all books by a given author")
+author_parser.add_argument("name", help="Author name")
+
+vibe_parser = subparsers.add_parser("vibe", help="Search for a term in both Tags and Genre in the BOOKS table")
+vibe_parser.add_argument("term", help="Search term")
+
+editions_parser = subparsers.add_parser("list-editions", help="List all editions of a given book")
+editions_parser.add_argument("title", help="Book title")
+
+args = parser.parse_args()
+
+if args.command == "get":
+    handle_get(args.table)
+
+elif args.command == "empty":
+    handle_empty(args.table, args.field)
+
+elif args.command == "search":
+    handle_search(args.term, args.table, args.field)
+
+elif args.command == "filter":
+    handle_filter(args.table, args.criteria)
+
+elif args.command == "author-works":
+    handle_author_works(args.name)
+
+elif args.command == "vibe":
+    handle_vibe_search(args.term)
+
+elif args.command == "list-editions":
+    handle_list_editions(args.title)
+
 
