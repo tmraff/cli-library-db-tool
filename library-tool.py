@@ -1,27 +1,31 @@
-# Import requests library so I can talk to the API
+# SET UP
+
+# Import statements
 import requests
-
-# CLI stuff
 import argparse
-
-parser = argparse.ArgumentParser(
-    description="CLI tool to manage and query your personal library database."
-, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-subparsers = parser.add_subparsers(dest="command", required=True)
-
-
-# Eyy privacy bro
 from dotenv import load_dotenv
 import os
+from formatters import *
 
 load_dotenv()
+
+# argparse parser
+parser = argparse.ArgumentParser(
+    description="CLI tool to manage and query your personal library database.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+subparsers = parser.add_subparsers(dest="command", required=True)
+
+# GLOBAL CONSTANTS
 
 # dotenv consts
 API_KEY = os.getenv("API_KEY")
 BASE_ID = os.getenv("BASE_ID")
 
-# Table IDs yay
+# HTTP headers. Asks for JSON to be returned and does the auth
+headers = {
+    "accept": "application/json",
+    "xc-token": API_KEY
+}
+# Table ID map
 TABLE_IDS = {
     "BOOKS": "mth1bd75romp8p3",
     "AUTHORS": "mgd51sp0b93cu0y",
@@ -31,12 +35,30 @@ TABLE_IDS = {
     "REVIEWS": "mjr2am3o9mlpyo1",
 }
 
-# HTTP headers because yummy. Asks for JSON to be returned and does the auth
-headers = {
-    "accept": "application/json",
-    "xc-token": API_KEY
+# Type map for field filtering
+TYPE_MAP = {
+    str: "string",
+    int: "integer",
+    float: "float",
+    bool: "boolean",
+    list: "list",
+    dict: "dict",
 }
 
+# Verbose/debug mode
+parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging")
+
+# Formatters table with the imported functions
+FORMATTERS = {
+    "BOOKS": format_books,
+    "AUTHORS": format_authors,
+    "EDITIONS": format_editions,
+    "PUBLISHERS": format_publishers,
+    "ARTWORKS": format_artworks,
+    "REVIEWS": format_reviews,
+}
+
+# UTILITY FUNCTIONS
 
 def get_records(table_id_arg):
     '''Sends a GET request to the API. Takes a table ID as an argument and returns the record data or an error message'''
@@ -58,83 +80,98 @@ def get_records(table_id_arg):
         print("Error:", response.status_code, response.text)
         return []
 
-def format_books(book):
-    '''Formats book records cleanly. Takes a record from the Books table as an argument and prints the output nicely'''
-    print(f"{book['Title']} ({book['First Published']})")
-    print(f"   Author(s): {', '.join(book['Author(s)'])}")
-    print(f"   Genre: {book.get('Genre', 'N/A').replace(',', ', ')}")
-    print(f"   Tags: {book.get('Tags', 'N/A').replace(',', ', ')}")
-    print(f"   Status: {book['Status']} | Rating: {book['Rating']}")
-    print(f"   Owned: {'Yes' if book['Owned'] else 'No'} | Annotated: {'Yes' if book['Annotated'] else 'No'}")
-    print("-" * 47)
+def print_valid_tables():
+    '''Prints a list of all valid tables'''
+    print("Available tables: ")
+    for name in TABLE_IDS.keys():
+        print(name)
+
+def resolve_key_case(target_dict, input_key):
+    '''Supports case insensitivity in other functions. Takes the arguments target dictionary and input key. Returns the key or nothing'''
+    for key in target_dict:
+        if key.lower() == input_key.lower():
+            return key
+    return None
+
+def infer_field_type(table_key, field_name, override_type=None):
+    '''Infers the type of data in a field. Override type can be passed manually.'''
+
+    if override_type:
+        return override_type
+
+    records = get_records(TABLE_IDS[table_key.upper()])
+    seen_values = set()
+
+    for record in records:
+        value = record.get(field_name)
+
+        if value is None or value == "":
+            continue
+
+        # Early return for non-int/float types
+        if isinstance(value, str):
+            return str
+        elif isinstance(value, float):
+            return float
+        elif isinstance(value, list):
+            return list
+        elif isinstance(value, dict):
+            return dict
+        elif isinstance(value, bool):
+            return bool  # In case NocoDB does return actual booleans someday
+
+        # If it's an int, collect for later bool check
+        elif isinstance(value, int):
+            seen_values.add(value)
+
+            # Early float detection
+            if isinstance(value, float):
+                return float
+
+    # Post-loop logic for int fields
+    if seen_values:
+        if seen_values <= {0, 1}:
+            return bool
+        else:
+            return int
+
+    # Nothing found
+    return None
+
+def coerce_value_to_type(value, target_type):
+    '''Attempts to coerce a string value to the specified Python type. Takes value and target type as arguments. Returns boolean. Raises ValueError on failure.'''
+    if target_type is bool:
+        if value.lower() in ["true", "yes", "1"]:
+            return True
+        elif value.lower() in ["false", "no", "0"]:
+            return False
+        else:
+            raise ValueError(f"'{value}' is not a valid boolean.")
+    try:
+        return target_type(value)
+    except Exception as e:
+        raise ValueError(f"Cannot convert '{value}' to {target_type.__name__}: {e}")
+
+def value_matches(field_value, target_value):
+    """Returns True if target_value matches field_value. Handles lists and comma-separated strings."""
+    target_value = target_value.lower()
+
+    if isinstance(field_value, list):
+        return any(target_value in str(v).lower() for v in field_value)
+
+    if isinstance(field_value, str) and "," in field_value:
+        # Split string into list and compare
+        return target_value in [v.strip().lower() for v in field_value.split(",")]
+
+    return target_value in str(field_value).lower()
 
 
-def format_authors(author):
-    '''Formats author records cleanly. Takes a record from the Authors table as an argument and prints the output nicely'''
-    print(f"{author['Name']} ({author.get('Pronouns', 'N/A')})")
-    print(f"  Website: {author.get('Website', 'N/A')}")
-    print(f"  Notes: {author.get('Notes', '')}")
-    print("-" * 47)
+def debug_print(*args, **kwargs):
+    '''Prints debug things when -v is in the command'''
+    if args_global.verbose:
+        print("[DEBUG]", *args, **kwargs)
 
-def format_editions(edition):
-    '''Formats edition records cleanly. Takes a record from the Editions table as an argument and prints the output nicely.'''
-    print(f"{edition['Title']} ({edition.get('Year', 'Unknown')})")
-    print(f"  Book: {edition['Books'].get('Display Name', 'N/A')}")
-    print(f"  Publisher: {edition.get('Publisher', 'N/A')} ({edition.get('City', 'N/A')})")
-    print(f"  Language: {edition.get('Language', 'N/A')} | Pages: {edition.get('Pages', 'N/A')}")
-    print(f"  ISBN: {edition.get('ISBN', 'N/A')}")
-    citation = edition.get('Citation (Cite Them Right)', 'N/A')
-    if citation and citation.strip():
-        print(f"  Citation: {citation}")
-    if edition.get('Notes'):
-        print(f"  Notes: {edition['Notes']}")
-    print("-" * 47)
-
-def format_publishers(publisher):
-    '''Formats publisher records cleanly.'''
-    print(f"{publisher['Publisher']} ({publisher.get('Countries', 'N/A')})")
-    if publisher.get('Imprint Of'):
-        print(f"  Imprint of: {publisher['Imprint Of']}")
-    if publisher.get('Website'):
-        print(f"  Website: {publisher['Website']}")
-    if publisher.get('Notes'):
-        print(f"  Notes: {publisher['Notes']}")
-    print(f"  Editions Published: {publisher.get('Editions', 0)}")
-    print("-" * 47)
-
-def format_artworks(artwork):
-    '''Formats artwork records cleanly.'''
-    title = artwork.get('Title', 'Untitled')
-    print(f"{title}")
-    print(f"  Medium: {artwork.get('Medium', 'Unknown')} | Date: {artwork.get('Date', 'Unknown')}")
-    if artwork.get('Books') and artwork['Books'].get('Display Name'):
-        print(f"  Related to: {artwork['Books']['Display Name']}")
-    else:
-        print("  Related to: None")
-    print("-" * 47)
-
-def format_reviews(review):
-    '''Formats review records cleanly.'''
-    title = review.get('Title', 'Untitled Review')
-    print(f"{title}")
-    if review.get('Books') and review['Books'].get('Display Name'):
-        print(f"  Book: {review['Books']['Display Name']}")
-    else:
-        print("  Book: None")
-    print(f"  Date: {review.get('Review Date', 'Unknown')}")
-    print(f"  Location: {review.get('Reviewed For', 'Private')} | Published In: {review.get('Published In', 'N/A')}")
-    if review.get('Review Path'):
-        print(f"  Path: {review['Review Path']}")
-    print("-" * 47)
-
-FORMATTERS = {
-    "BOOKS": format_books,
-    "AUTHORS": format_authors,
-    "EDITIONS": format_editions,
-    "PUBLISHERS": format_publishers,
-    "ARTWORKS": format_artworks,
-    "REVIEWS": format_reviews,
-}
+# CORE FEATURES
 
 def find_empty_fields(table_key, field_name, formatter):
     '''Finds records with a specific empty field. Takes the table ID and the field name as arguments and returns the matching records'''
@@ -179,6 +216,7 @@ def list_fields(table_key):
         print(field)
 
 def list_author_works(author_name):
+    '''Lists all works by a given author. Takes author name as an argument and returns a list of matching books'''
     author_id = None
 
     # Find matching author ID
@@ -206,64 +244,9 @@ def list_author_works(author_name):
 
     if not found:
         print("No books found from this author.")
-
-def print_valid_tables():
-    print("Available tables: ")
-    for name in TABLE_IDS.keys():
-        print(name)
-
-def resolve_key_case(target_dict, input_key):
-    for key in target_dict:
-        if key.lower() == input_key.lower():
-            return key
-    return None
-
-
-def search_records(term, table_key, fields="Title"):
-    '''Searches for a term in one or more fields of a table. Takes arguments: search term, table key, and a single field or list of fields.'''
-
-    table_id = TABLE_IDS.get(table_key.upper())
-    if not table_id:
-        print("Table not found.")
-        print_valid_tables()
-        return
-
-    # Allow both strings and lists as field input
-    if isinstance(fields, str):
-        fields = [fields]
-
-    records = get_records(table_id)
-    found = False
-
-    for record in records:
-        for field in fields:
-            real_field = resolve_key_case(record, field)
-            if not real_field:
-                continue
-
-            # List and string logic
-            raw_value = record.get(real_field, "")
-            if isinstance(raw_value, list):
-                match_string = ", ".join(map(str, raw_value)).lower()
-            else:
-                match_string = str(raw_value).lower()
-
-            # print(f"Checking '{term.lower()}' in field '{real_field}': {match_string}")
-
-            if term.lower() in match_string:
-                formatter = FORMATTERS.get(table_key.upper(), lambda x: print(x))
-                formatter(record)
-                found = True
-                break
-
-    if not found:
-        if len(fields) == 1:
-            print(f"No matches found for '{term}' in {fields[0]} of {table_key}.")
-        else:
-            fields_joined = ", ".join(fields)
-            print(f"No matches found for '{term}' in any of [{fields_joined}] of {table_key}.")
-        
+       
 def list_book_editions(book_title):
+    '''Lists all editions of a specific book. Takes the book title as an argument and returns all matching editions for that book'''
     book_id = None
     books = get_records(TABLE_IDS["BOOKS"])
 
@@ -292,11 +275,102 @@ def list_book_editions(book_title):
     if not found:
         print("No editions found for this book.")
 
-def search_vibe(search_term):
-    search_records(search_term, "Books", ["Genre", "Tags"])
+def parse_filter_criteria(criteria_list):
+    '''Takes filter arguments and formats them for usage. Takes arguments and returns a list of dictionaries'''
+    for criterion in criteria_list:
 
-# Handle functions for the nice fun argparse stuff
+        # Initialise empty dict
+        parsed_filter = {
+                "field": None,
+                "values": [],
+                "logic": "AND", # Default logic. Also takes OR
+                "negate": False,
+        }
+
+        parsed_filters = []
+
+        # Check for logic prefixes
+        if criterion.upper().startswith("NOT:"):
+            parsed_filter["negate"] = True
+            criterion = criterion[4:] # Removes NOT:
+        elif criterion.upper().startswith("OR:"):
+            parsed_filter["logic"] = "OR"
+            criterion = criterion[3:] # Removes OR:
+        elif criterion.upper().startswith("AND:"):
+            parsed_filter["logic"] = "AND"
+            criterion = criterion[4:] # Removes AND:
+            
+        # Split by = to get field and values
+        if "=" not in criterion:
+            raise ValueError("Filter must contain '=' to separate field and value")
+
+        key, value = criterion.split("=", 1)
+
+        # Normalise and split values
+        parsed_filter["field"] = key.strip().lower()
+        parsed_filter["values"] = [v.strip().lower() for v in value.split(",")]
+
+        parsed_filters.append(parsed_filter)
+    return parsed_filters
+
+# We figuring out field validation
+def get_valid_fields(table_key):
+    '''Returns a list of valid field names for a given table. Takes table key as an argument'''
+    table_id = TABLE_IDS.get(table_key.upper())
+    if not table_id:
+        raise ValueError("Table not found.")
+
+    records = get_records(table_id)
+    if not records:
+        raise ValueError("No records found in the table.")
+
+    return list(records[0].keys())
+
+def validate_fields(input_fields, table_key):
+    '''Validates that all input field names exist in the table'''
+    valid_fields = get_valid_fields(table_key)
+    valid_fields_lower = [f.lower() for f in valid_fields]
+
+    for field in input_fields:
+        if field.lower() not in valid_fields_lower:
+            raise ValueError(f"Invalid field: {field}")
+
+# Filter time baby
+def record_matches_filter(record, parsed_filters):
+    '''Compares record and filters. Takes record and parsed filter list as inputs and returns boolean'''
+    for f in parsed_filters:
+        field = f["field"]
+        values = f["values"]
+        logic = f["logic"]
+        negate = f["negate"]
+
+        debug_print(f"Field is {field}")  # debugging
+        actual_field = resolve_key_case(record, field)
+        debug_print(f"Actual field is {actual_field}")
+        field_value = record.get(actual_field)
+        debug_print(f"Field value is {field_value}")
+
+        values = [v.lower() for v in values]
+
+        if logic == "AND":
+            match = all(value_matches(field_value, v) for v in values)
+        elif logic == "OR":
+            match = any(value_matches(field_value, v) for v in values)
+        else:
+            raise ValueError(f"Unknown logic operator: {logic}")
+
+        if negate:
+            match = not match
+
+        if not match:
+            return False
+
+    return True
+
+# HANDLER FUNCTIONS FOR CLEAN CLI LOGIC
+
 def handle_get(table_key):
+    '''Handles the logic for the get_records() function. Takes a table key and prints the formatted records'''
     table_id = TABLE_IDS.get(table_key.upper())
     if not table_id:
         print("Invalid table name.")
@@ -309,40 +383,81 @@ def handle_get(table_key):
         formatter(record)
 
 def handle_empty(table_key, field_name):
+    '''Handles the logic for the find_empty_fields() function. Takes a table key and field nakme and prints the matching formatted records'''
     formatter = FORMATTERS.get(table_key.upper(), lambda x: print(x))
     find_empty_fields(table_key, field_name, formatter)
 
 def handle_list_fields(table_key):
+    '''Handles the logic for the list_fields() function. Takes a table key and prints a list of fields'''
     list_fields(table_key)
 
 def handle_list_tables():
+    '''Handles the logic for the print_valid_tables() function. Prints a list of all valid tables'''
     print_valid_tables()
 
 def handle_author_works(author_name):
+    '''Handles the logic for the list_author_works() function. Takes an author name and prints a list of all of their books'''
     list_author_works(author_name)
 
-def handle_search(term, table_key, field="Title"):
-    search_records(term, table_key, field)
-
-def handle_vibe_search(term):
-    search_records(term, "books", ["Genre", "Tags"])
-
 def handle_list_editions(book_title):
+    '''Handles the logic for the list_book_editions() function. Takes a book title and prints a list of editions of that book'''
     list_book_editions(book_title)
 
+def handle_filter(table_key, criteria_list):
+    '''Handles the logic for filtering records. Takes the inputs table key and criteria list and prints a list of records matching the filter'''
+    parsed_filter_criteria = parse_filter_criteria(criteria_list)
+    debug_print(f"Parsed filters: {parsed_filter_criteria}")
+    
+    # Validate fields. Raises an error if invalid
+    input_fields = [f["field"] for f in parsed_filter_criteria]
+    validate_fields(input_fields, table_key)
 
-# It's argparse time baby
+    for f in parsed_filter_criteria:
+        field = f["field"]
+        values = f["values"]
+
+        inferred_type = infer_field_type(table_key, field)
+        debug_print(f"Field '{field}' inferred as type {inferred_type.__name__ if inferred_type else 'Unknown'}")
+        
+        if inferred_type is None:
+            debug_print(f"Skipping type validation for field '{field}' (no type could be inferred)")
+            continue
+
+        # Coerce to type
+        for v in values:
+            try:
+                _ = coerce_value_to_type(v, inferred_type)
+            except ValueError as e:
+                raise ValueError(f"Invalid value for field '{field}': {e}")
+
+        f["values"] = [coerce_value_to_type(v, inferred_type) for v in values]
+
+    # Get all records from the table
+    records = get_records(TABLE_IDS[table_key.upper()])
+
+    # Filter records using passed and coerced data
+    filtered_records = [record for record in records if record_matches_filter(record, parsed_filter_criteria)]
+
+    # Output formatted filtered results
+    formatter = FORMATTERS[table_key.upper()]
+    for record in filtered_records:
+        formatter(record)
+
+    if not filtered_records:
+        print("No matching records found.")
+        
+
+# DEBUG HANDLERS
+def handle_debug_type(table_key, field):
+    infer_field_type(table_key, field) 
+
+# ARGPARSE LOGIC
 get_parser = subparsers.add_parser("get", help="Get all records from a specified table")
 get_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS.keys()], type=str.lower, help ="Table to fetch records from")
 
 empty_parser = subparsers.add_parser("empty", help="Find records with empty fields")
 empty_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS.keys()], type=str.lower, help="Table to search")
 empty_parser.add_argument("field", help="Field name to check for emptiness")
-
-search_parser = subparsers.add_parser("search", help="Search for a term in a table")
-search_parser.add_argument("term", help="Search term")
-search_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS.keys()], type=str.lower, help="Table to search")
-search_parser.add_argument("--field", default="Title", help="Field to search in")
 
 filter_parser = subparsers.add_parser("filter", help="Filter records by multiple field=value criteria")
 filter_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS.keys()], type=str.lower, help="Table to filter")
@@ -357,16 +472,29 @@ vibe_parser.add_argument("term", help="Search term")
 editions_parser = subparsers.add_parser("list-editions", help="List all editions of a given book")
 editions_parser.add_argument("title", help="Book title")
 
-args = parser.parse_args()
+# DEBUGGING ARGPARSE LOGIC
+fields_parser = subparsers.add_parser("debug-fields", help="Print all field names in a table")
+fields_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS])
 
+validate_parser = subparsers.add_parser("debug-validate", help="Validate field names for a table")
+validate_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS])
+validate_parser.add_argument("fields", nargs="+", help="Field names to validate")
+
+type_parser = subparsers.add_parser("debug-type", help="Infer the data type of a field")
+type_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS])
+type_parser.add_argument("field", help="Field name to inspect")
+type_parser.add_argument("--override-type", help="Manually override the inferred type (e.g. 'float', 'int', 'bool', 'str')")
+
+# These lines come last
+args = parser.parse_args()
+args_global = args
+
+# PARSE AND CALL
 if args.command == "get":
     handle_get(args.table)
 
 elif args.command == "empty":
     handle_empty(args.table, args.field)
-
-elif args.command == "search":
-    handle_search(args.term, args.table, args.field)
 
 elif args.command == "filter":
     handle_filter(args.table, args.criteria)
@@ -374,10 +502,25 @@ elif args.command == "filter":
 elif args.command == "author-works":
     handle_author_works(args.name)
 
-elif args.command == "vibe":
-    handle_vibe_search(args.term)
-
 elif args.command == "list-editions":
     handle_list_editions(args.title)
 
+# DEBUGGING PARSE AND CALL
+elif args.command == "debug-fields":
+    fields = get_valid_fields(args.table)
+    print(f"Fields in {args.table.upper()}:", fields)
+
+elif args.command == "debug-validate":
+    try:
+        validate_fields(args.fields, args.table)
+        print("Validation passed.")
+    except ValueError as e:
+        print(f"Validation error: {e}")
+
+elif args.command == "debug-type":
+    try:
+        inferred_type = infer_field_type(args.table, args.field)
+        print(f"Inferred type of {args.field} in {args.table}: {inferred_type}")
+    except ValueError as e:
+        print(f"Error: {e}")
 
