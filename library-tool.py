@@ -14,6 +14,7 @@ parser = argparse.ArgumentParser(
     description="CLI tool to manage and query your personal library database.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 subparsers = parser.add_subparsers(dest="command", required=True)
 
+
 # GLOBAL CONSTANTS
 
 # dotenv consts
@@ -79,6 +80,36 @@ def get_records(table_id_arg):
     else:
         print("Error:", response.status_code, response.text)
         return []
+
+def patch_record(table_key, record_id, payload):
+    '''Sends a PATCH request to the API. Takes table key, and payload as inputs'''
+    table_id = TABLE_IDS[table_key.upper()]
+    url = f"http://127.0.0.1:8080/api/v2/tables/{table_id}/records"
+
+    # Insert ID into the payload
+    payload_with_id = {"Id": record_id}
+    payload_with_id.update(payload)
+
+    response = requests.patch(url, headers=headers, json=payload_with_id)
+
+    if response.status_code == 200:
+        debug_print(f"Record {record_id} updated successfully.")
+        return response.json()
+    else:
+        raise RuntimeError(f"PATCH failed: {response.status_code} - {response.text}")
+
+def post_record(table_key, payload):
+    '''Sends a POST request to create a new record in a table. Takes table key and payload as inputs'''
+    table_id = TABLE_IDS[table_key.upper()]
+    url = f"http://127.0.0.1:8080/api/v2/tables/{table_id}/records"
+
+    response = requests.post(url, headers=headers, json=payload)
+
+    if response.status_code == 200:
+        debug_print(f"Record created successfully.")
+        return response.json()
+    else:
+        raise RuntimeError(f"POST failed: {response.status_code} - {response.text}")
 
 def print_valid_tables():
     '''Prints a list of all valid tables'''
@@ -164,7 +195,6 @@ def value_matches(field_value, target_value):
         return target_value in [v.strip().lower() for v in field_value.split(",")]
 
     return target_value in str(field_value).lower()
-
 
 def debug_print(*args, **kwargs):
     '''Prints debug things when -v is in the command'''
@@ -367,6 +397,80 @@ def record_matches_filter(record, parsed_filters):
 
     return True
 
+# Filter and then patch
+def filter_and_patch(table_key, search_criteria, patch_field, patch_content):
+    parsed_criteria = parse_filter_criteria(search_criteria)
+    table_id = TABLE_IDS[table_key.upper()]
+
+    fields = [f["field"] for f in parsed_criteria]
+    validate_fields(fields, table_key)
+
+    # Fetch records
+    records = get_records(table_id)
+    matches = [r for r in records if record_matches_filter(r, parsed_criteria)]
+
+    if not matches:
+        print("No matching records found.")
+        return
+
+    # Display matches
+    for i, record in enumerate(matches):
+        display = f"{i+1}. {record.get('Title', 'Untitled')} ({record.get('First Published', 'Unknown')})"
+        authors = record.get('Author(s)', [])
+        if isinstance(authors, list):
+            display += f" - {', '.join(authors)}"
+        print(display)
+        if args_global.verbose:
+            print(f"   ID: {record.get('Id', 'N/A')}")
+
+    choice = input("Enter the number of the record to patch (or 'c' to cancel): ").strip()
+    if choice.lower() == 'c':
+        print("Cancelled.")
+        return
+
+    try:
+        index = int(choice) - 1
+        if index < 0 or index >= len(matches):
+            raise IndexError
+    except (ValueError, IndexError):
+        print("Invalid selection.")
+        return
+
+    target_record = matches[index]
+    record_id = target_record.get("Id")
+    if not record_id:
+        print("Selected record has no ID; cannot patch.")
+        return
+
+    # Ensure patch field is valid
+    valid_field = resolve_key_case(matches[0], patch_field)
+    if not valid_field:
+        print(f"Field '{patch_field}' not found.")
+        return
+
+    # Confirm
+    print(f"\nWill update field '{valid_field}' to '{patch_content}'")
+    confirm = input("Proceed? [y/n] ").strip().lower()
+    if confirm != 'y':
+        print("Cancelled.")
+        return
+
+    # Patch it
+    success = patch_record(table_key, record_id, {valid_field: patch_content})
+
+    if success:
+        print("Record successfully updated.")
+    else:
+        print("Patch failed.")
+
+# Concatenation functions
+def generate_display_name(record):
+    '''Generates a display name for the Books table. Takes a record as input and returns the generated display name in the form <author> - <year> - <title>'''
+    author = ", ".join(record.get("Author(s)", []))
+    year = record.get("First Published", "Unknown")
+    title = record.get("Title", "Untitled")
+    return f"{author} - {year} - {title}"
+
 # HANDLER FUNCTIONS FOR CLEAN CLI LOGIC
 
 def handle_get(table_key):
@@ -418,7 +522,7 @@ def handle_filter(table_key, criteria_list):
 
         inferred_type = infer_field_type(table_key, field)
         debug_print(f"Field '{field}' inferred as type {inferred_type.__name__ if inferred_type else 'Unknown'}")
-        
+
         if inferred_type is None:
             debug_print(f"Skipping type validation for field '{field}' (no type could be inferred)")
             continue
@@ -445,11 +549,16 @@ def handle_filter(table_key, criteria_list):
 
     if not filtered_records:
         print("No matching records found.")
-        
+
+def handle_filter_and_patch(table_key, criteria, field, new_value):
+    try:
+        filter_and_patch(table_key, criteria, field, new_value)
+    except ValueError as e:
+        print(f"Error: {e}")
 
 # DEBUG HANDLERS
 def handle_debug_type(table_key, field):
-    infer_field_type(table_key, field) 
+    infer_field_type(table_key, field)
 
 # ARGPARSE LOGIC
 get_parser = subparsers.add_parser("get", help="Get all records from a specified table")
@@ -471,6 +580,13 @@ vibe_parser.add_argument("term", help="Search term")
 
 editions_parser = subparsers.add_parser("list-editions", help="List all editions of a given book")
 editions_parser.add_argument("title", help="Book title")
+
+patch_parser = subparsers.add_parser("patch", help="Find and patch a record interactively")
+patch_parser.add_argument("table", choices=[t.lower() for t in TABLE_IDS.keys()], help="Table to search")
+patch_parser.add_argument("criteria", help="Search criteria (e.g., genre=fiction)")
+patch_parser.add_argument("field", help="Field to patch (e.g., title)")
+patch_parser.add_argument("new_value", help="New value to patch into the matched record")
+
 
 # DEBUGGING ARGPARSE LOGIC
 fields_parser = subparsers.add_parser("debug-fields", help="Print all field names in a table")
@@ -504,6 +620,10 @@ elif args.command == "author-works":
 
 elif args.command == "list-editions":
     handle_list_editions(args.title)
+
+elif args.command == "patch":
+    handle_filter_and_patch(args.table, [args.criteria], args.field, args.new_value)
+
 
 # DEBUGGING PARSE AND CALL
 elif args.command == "debug-fields":
